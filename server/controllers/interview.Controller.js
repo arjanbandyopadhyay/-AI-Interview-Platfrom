@@ -3,6 +3,11 @@ import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { askAi } from '../services/openRouter.services.js';
 import User from '../models/users.js';
 import Interview from '../models/interview.model.js';
+const clampScore = (val, max = 10) => {
+    const n = Number(val);
+    if (isNaN(n)) return 0;
+    return Math.min(Math.max(n, 0), max);
+};
 
 export const analyseResume = async (req, res) => {
     try {
@@ -44,7 +49,7 @@ export const analyseResume = async (req, res) => {
         const aiResponse = await askAi(messages);
         const cleanJson = aiResponse.replace(/```json|```/gi, '').trim();
         const parsed = JSON.parse(cleanJson);
-        
+
         if (fs.existsSync(filepath)) {
             fs.unlinkSync(filepath);
         }
@@ -177,7 +182,7 @@ export const submitAnswer = async (req, res) => {
     try {
         const { interviewId, questionIndex, answer, timeTaken } = req.body;
         const interview = await Interview.findById(interviewId);
-        
+
         if (!interview) {
             return res.status(404).json({ message: "Interview not found" });
         }
@@ -208,12 +213,15 @@ export const submitAnswer = async (req, res) => {
                 role: "system",
                 content: `
 You are a professional human interviewer evaluating a candidate's answer.
+Score confidence, communication, and correctness each strictly on a scale of 0 to 10.
+finalScore must also be strictly between 0 and 10 - it is an overall rating,
+NOT the sum of the other three scores.
 Return ONLY valid JSON in this format:
 {
-  "confidence": number,
-  "communication": number,
-  "correctness": number,
-  "finalScore": number,
+  "confidence": number (0-10),
+  "communication": number (0-10),
+  "correctness": number (0-10),
+  "finalScore": number (0-10),
   "feedback": "short human feedback (10-15 words)"
 }
 `
@@ -228,11 +236,12 @@ Return ONLY valid JSON in this format:
         const cleanJson = aiResponse.replace(/```json|```/gi, '').trim();
         const parsed = JSON.parse(cleanJson);
 
+        
         question.answer = answer;
-        question.confidence = parsed.confidence || 0;
-        question.communication = parsed.communication || 0;
-        question.correctness = parsed.correctness || 0;
-        question.score = parsed.finalScore || 0;
+        question.confidence = clampScore(parsed.confidence);
+        question.communication = clampScore(parsed.communication);
+        question.correctness = clampScore(parsed.correctness);
+        question.score = clampScore(parsed.finalScore);
         question.feedback = parsed.feedback || "Good response.";
 
         await interview.save();
@@ -249,7 +258,7 @@ export const finishInterview = async (req, res) => {
     try {
         const { interviewId } = req.body;
         const interview = await Interview.findById(interviewId);
-        
+
         if (!interview) {
             return res.status(404).json({ message: "Failed to find interview" });
         }
@@ -260,7 +269,6 @@ export const finishInterview = async (req, res) => {
         let totalCommunication = 0;
         let totalCorrectness = 0;
 
-      
         if (Array.isArray(interview.questions)) {
             interview.questions.forEach((q) => {
                 totalScore += q.score || 0;
@@ -275,23 +283,24 @@ export const finishInterview = async (req, res) => {
         const avgCommunication = totalQuestions ? totalCommunication / totalQuestions : 0;
         const avgCorrectness = totalQuestions ? totalCorrectness / totalQuestions : 0;
 
+        
         interview.finalScore = Number(finalScore.toFixed(1));
         interview.status = "completed";
 
         await interview.save();
 
         return res.status(200).json({
-            finalScore: Number(finalScore.toFixed(1)),
+            finalScore: interview.finalScore,
             confidence: Number(avgConfidence.toFixed(1)),
             communication: Number(avgCommunication.toFixed(1)),
             correctness: Number(avgCorrectness.toFixed(1)),
             questionWiseScore: interview.questions.map((q) => ({
                 question: q.question,
-                score: Number((q.score || 0).toFixed(1),
+                score: Number((q.score || 0).toFixed(1)),
                 feedback: q.feedback || "",
-                confidence: q.confidence || 0,
-                communication: q.communication || 0,
-                correctness: q.correctness || 0,
+                confidence: Number((q.confidence || 0).toFixed(1)),
+                communication: Number((q.communication || 0).toFixed(1)),
+                correctness: Number((q.correctness || 0).toFixed(1)),
             })),
         });
 
@@ -301,31 +310,30 @@ export const finishInterview = async (req, res) => {
     }
 };
 
-export const getMyInterviews= async(req,res)=>{
+export const getMyInterviews = async (req, res) => {
     try {
-      const interview= await Interview.find({userId:req.userId}) 
-      .sort ({createAt:-1}) 
-      .select("role experience mode finalScore status createdAt");
-      return res.status(200).json(interview)
+        const interview = await Interview.find({ userId: req.userId })
+            .sort({ createdAt: -1 })
+            .select("role experience mode finalScore status createdAt");
+        return res.status(200).json(interview)
     } catch (error) {
-       return res.status(500).json({ message: `Failed to find current interview: ${error}` }); 
+        return res.status(500).json({ message: `Failed to find current interview: ${error}` });
     }
 }
 
-export const getInterviewReport= async (req,res)=>{
+export const getInterviewReport = async (req, res) => {
     try {
-        const interview=await Interview.findById(req.params.id)
+        const interview = await Interview.findById(req.params.id)
 
-        if(!interview){
-         return res.status(404).json({message:"Interview not Found"})   
+        if (!interview) {
+            return res.status(404).json({ message: "Interview not Found" })
         }
         const totalQuestions = interview.questions ? interview.questions.length : 0;
-        
+
         let totalConfidence = 0;
         let totalCommunication = 0;
         let totalCorrectness = 0;
 
-      
         if (Array.isArray(interview.questions)) {
             interview.questions.forEach((q) => {
                 totalConfidence += q.confidence || 0;
@@ -339,14 +347,23 @@ export const getInterviewReport= async (req,res)=>{
         const avgCorrectness = totalQuestions ? totalCorrectness / totalQuestions : 0;
 
         return res.json({
-            finalScore:interview.finalScore,
-            confidence:Number(avgConfidence.toFixed(1)),
-            communication:Number(avgCommunication.toFixed(1)),
-            correctness:Number(avgCorrectness.toFixed(1)),
-            questionWiseScore:interview.questions
+            
+            finalScore: Number((interview.finalScore || 0).toFixed(1)),
+            confidence: Number(avgConfidence.toFixed(1)),
+            communication: Number(avgCommunication.toFixed(1)),
+            correctness: Number(avgCorrectness.toFixed(1)),
+            questionWiseScore: interview.questions.map((q) => ({
+                question: q.question,
+                answer: q.answer || "",
+                score: Number((q.score || 0).toFixed(1)),
+                feedback: q.feedback || "",
+                confidence: Number((q.confidence || 0).toFixed(1)),
+                communication: Number((q.communication || 0).toFixed(1)),
+                correctness: Number((q.correctness || 0).toFixed(1)),
+            }))
         })
 
     } catch (error) {
-         return res.status(500).json({ message: `Failed to find current interview report: ${error}` });
+        return res.status(500).json({ message: `Failed to find current interview report: ${error}` });
     }
 }
