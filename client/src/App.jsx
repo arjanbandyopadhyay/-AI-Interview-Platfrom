@@ -10,7 +10,7 @@ import InterviewHistory from "./pages/interviewHistory"
 import InterviewReport from "./pages/InterviewReport"
 import Pricing from "./pages/Pricing"
 
-export const ServerUrl = "http://localhost:8000"
+export const ServerUrl = "https://ai-interview-platfrom.onrender.com"
 
 function App() {
   const dispatch=useDispatch()
