@@ -6,7 +6,7 @@ import axios from "axios"
 import { useDispatch } from "react-redux"
 import { setUserData } from "./redux/userSlice"
 import InterviewPage from "./pages/InterviewPage"
-import InterviewHistory from "./pages/interviewHistory"
+import InterviewHistory from "./pages/InterviewHistory"
 import InterviewReport from "./pages/InterviewReport"
 import Pricing from "./pages/Pricing"
 
