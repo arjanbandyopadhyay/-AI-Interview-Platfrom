@@ -20,11 +20,13 @@ function Step2Interview({ interviewData, onFinish }) {
   const [timeLeft, setTimeLeft] = useState(questions[0]?.timeLimit || 60);
   const [selectedVoice, setSelectedVoice] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isFinishing, setIsFinishing] = useState(false);
   const [voiceGender, setVoiceGender] = useState("female");
   const [subtitle, setSubtitle] = useState("");
 
   const vedioRef = useRef(null);
   const currentQuestion = questions[currentIndex];
+  const isLastQuestion = currentIndex + 1 >= questions.length;
   const isMicOnRef = useRef(isMicOn);
   useEffect(() => {
     isMicOnRef.current = isMicOn;
@@ -247,6 +249,7 @@ function Step2Interview({ interviewData, onFinish }) {
   const finishInterview = async () => {
     stopMic();
     setIsMicOn(false);
+    setIsFinishing(true);
     try {
       const result = await axios.post(
         ServerUrl + "/api/interview/finish",
@@ -257,6 +260,8 @@ function Step2Interview({ interviewData, onFinish }) {
       onFinish(result.data);
     } catch (error) {
       console.error(error);
+    } finally {
+      setIsFinishing(false);
     }
   };
 
@@ -386,9 +391,16 @@ function Step2Interview({ interviewData, onFinish }) {
               <p className="text-emerald-700 font-medium mb-4">{feedback}</p>
               <button
                 onClick={handleNext}
-                className="w-full bg-gradient-to-r from-emerald-600 to-teal-500 text-white py-3 rounded-xl shadow-md hover:opacity-90 transition flex items-center justify-center gap-1 font-semibold"
+                disabled={isFinishing}
+                className="w-full bg-gradient-to-r from-emerald-600 to-teal-500 text-white py-3 rounded-xl shadow-md hover:opacity-90 transition flex items-center justify-center gap-1 font-semibold disabled:opacity-70 disabled:cursor-not-allowed"
               >
-                Next Question <BsArrowRight size={18} />
+                {isLastQuestion
+                  ? (isFinishing ? "Submitting Interview..." : "Submit Interview")
+                  : (
+                    <>
+                      Next Question <BsArrowRight size={18} />
+                    </>
+                  )}
               </button>
             </motion.div>
           )}
