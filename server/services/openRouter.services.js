@@ -2,19 +2,21 @@ import axios from 'axios'
 
 export const askAi=async(messages)=>{
     try {
-        if(!messages || !Array.isArray(messages) || messages.lenght===0){
+        if(!messages || !Array.isArray(messages) || messages.length===0){
             throw  new Error("Message array is empty:");
         }
         const response=await axios.post('https://openrouter.ai/api/v1/chat/completions',
             {
                 model:'openai/gpt-4o-mini',
-                messages:messages
+                messages:messages,
+                max_tokens:1000   // caps the cost of any single call
 
         },
     {headers: {
     Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
     'Content-Type': 'application/json',
-  },});
+  },
+  timeout:30000});   // do not let a slow upstream hold the request open forever
   const content=response?.data?.choices?.[0]?.message?.content;
   if(!content || !content.trim()){
     throw new Error("AI returned empty response")

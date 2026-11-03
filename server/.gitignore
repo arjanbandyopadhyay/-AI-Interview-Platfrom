@@ -1,1 +1,7 @@
 .env
+.env.*
+!.env.example
+node_modules/
+# uploaded resumes are temporary files; keep only the folder
+public/*
+!public/.gitkeep

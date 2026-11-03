@@ -228,6 +228,7 @@ function Step2Interview({ interviewData, onFinish }) {
     } catch (error) {
       console.error(error);
       setIsSubmitting(false);
+      alert(error?.response?.data?.message || "Could not submit your answer. Please try again.");
     }
   };
 
@@ -260,6 +261,7 @@ function Step2Interview({ interviewData, onFinish }) {
       onFinish(result.data);
     } catch (error) {
       console.error(error);
+      alert(error?.response?.data?.message || "Could not finish the interview. Please try again.");
     } finally {
       setIsFinishing(false);
     }

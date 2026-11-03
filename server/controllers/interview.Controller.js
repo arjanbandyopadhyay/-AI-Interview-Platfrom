@@ -1,8 +1,9 @@
 import fs from 'fs';
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { askAi } from '../services/openRouter.services.js';
 import User from '../models/users.js';
 import Interview from '../models/interview.model.js';
+import { LIMITS } from '../config/limits.js';
+import { isObjectIdString, cleanString, cleanList } from '../utils/validators.js';
 const clampScore = (val, max = 10) => {
     const n = Number(val);
     if (isNaN(n)) return 0;
@@ -15,9 +16,15 @@ export const analyseResume = async (req, res) => {
             return res.status(400).json({ message: "Resume required" });
         }
         const filepath = req.file.path;
+        // loaded on first use: pdf.js is heavy and only this endpoint needs it
+        const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
         const filebuffer = await fs.promises.readFile(filepath);
         const uint8Array = new Uint8Array(filebuffer);
         const pdf = await pdfjsLib.getDocument({ data: uint8Array }).promise;
+        if (pdf.numPages > LIMITS.MAX_RESUME_PAGES) {
+            await fs.promises.unlink(filepath).catch(() => {});
+            return res.status(400).json({ message: `Resume is too long (max ${LIMITS.MAX_RESUME_PAGES} pages)` });
+        }
 
         let resumeText = '';
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
@@ -27,7 +34,11 @@ export const analyseResume = async (req, res) => {
             resumeText += pageText + "\n";
         }
 
-        resumeText = resumeText.replace(/\s+/g, " ").trim();
+        resumeText = resumeText.replace(/\s+/g, " ").trim().slice(0, LIMITS.MAX_RESUME_CHARS);
+        if (!resumeText) {
+            await fs.promises.unlink(filepath).catch(() => {});
+            return res.status(400).json({ message: "Could not read any text from this PDF. Please upload a text-based resume." });
+        }
 
         const messages = [
             {
@@ -55,10 +66,10 @@ export const analyseResume = async (req, res) => {
         }
 
         return res.json({
-            role: parsed.role,
-            experience: parsed.experience,
-            projects: parsed.projects,
-            skills: parsed.skills,
+            role: cleanString(parsed.role).slice(0, LIMITS.MAX_FIELD_CHARS),
+            experience: cleanString(parsed.experience).slice(0, LIMITS.MAX_FIELD_CHARS),
+            projects: cleanList(parsed.projects, LIMITS.MAX_LIST_ITEMS, LIMITS.MAX_FIELD_CHARS),
+            skills: cleanList(parsed.skills, LIMITS.MAX_LIST_ITEMS, LIMITS.MAX_FIELD_CHARS),
             resumeText
         });
 
@@ -67,33 +78,37 @@ export const analyseResume = async (req, res) => {
         if (req.file && fs.existsSync(req.file.path)) {
             fs.unlinkSync(req.file.path);
         }
-        return res.status(500).json({ message: error.message });
+        if (error?.name === "InvalidPDFException" || error?.name === "FormatError") {
+            return res.status(400).json({ message: "Could not read this file. Please upload a valid PDF resume." });
+        }
+        return res.status(500).json({ message: "Could not analyse the resume. Please try again." });
     }
 };
 
 export const generateQuestion = async (req, res) => {
     try {
-        let { role, experience, mode, resumeText, projects, skills } = req.body;
-
-        role = role?.trim();
-        experience = experience?.trim();
-        mode = mode?.trim();
+        const body = req.body ?? {};
+        const role = cleanString(body.role);
+        const experience = cleanString(body.experience);
+        const mode = cleanString(body.mode);
 
         if (!role || !experience || !mode) {
             return res.status(400).json({ message: "Role, Experience, and Mode are required" });
         }
-
-        const user = await User.findById(req.userId);
-        if (!user) {
-            return res.status(400).json({ message: "User not Found" });
+        if (role.length > LIMITS.MAX_FIELD_CHARS || experience.length > LIMITS.MAX_FIELD_CHARS) {
+            return res.status(400).json({ message: `Role and Experience must be at most ${LIMITS.MAX_FIELD_CHARS} characters` });
         }
-        if (user.credits < 50) {
-            return res.status(400).json({ message: "Not enough Credits. Minimum 50 Credits required" });
+        if (!["HR", "Technical"].includes(mode)) {
+            return res.status(400).json({ message: "Mode must be HR or Technical" });
         }
 
-        const projectText = Array.isArray(projects) && projects.length ? projects.join(", ") : "None";
-        const skillsText = Array.isArray(skills) && skills.length ? skills.join(", ") : "None";
-        const safeResume = typeof resumeText === 'string' ? resumeText.trim() : (resumeText?.text?.trim() || "None");
+        const projectList = cleanList(body.projects, LIMITS.MAX_LIST_ITEMS, LIMITS.MAX_FIELD_CHARS);
+        const skillList = cleanList(body.skills, LIMITS.MAX_LIST_ITEMS, LIMITS.MAX_FIELD_CHARS);
+        const projectText = projectList.length ? projectList.join(", ") : "None";
+        const skillsText = skillList.length ? skillList.join(", ") : "None";
+        const rawResume = typeof body.resumeText === 'string' ? body.resumeText
+            : (typeof body.resumeText?.text === 'string' ? body.resumeText.text : "");
+        const safeResume = rawResume.trim().slice(0, LIMITS.MAX_RESUME_CHARS) || "None";
 
         const userPrompt = `
         Role:${role}
@@ -134,76 +149,125 @@ Question 6 → hard
             }
         ];
 
-        const aiResponse = await askAi(messages);
-        if (!aiResponse || !aiResponse.trim()) {
-            return res.status(500).json({ message: "AI returned empty response" });
+        // Take the credits BEFORE the paid LLM call, in one atomic step that also checks the balance.
+        // (Checking first and deducting later let parallel requests all pass the check.)
+        const cost = LIMITS.CREDITS_PER_INTERVIEW;
+        const user = await User.findOneAndUpdate(
+            { _id: req.userId, credits: { $gte: cost } },
+            { $inc: { credits: -cost } },
+            { returnDocument: "after" }
+        );
+        if (!user) {
+            const exists = await User.exists({ _id: req.userId });
+            return res.status(400).json({
+                message: exists ? `Not enough Credits. Minimum ${cost} Credits required` : "User not Found"
+            });
         }
 
-        const questionArray = aiResponse
-            .split("\n")
-            .map(q => q.trim())
-            .filter(q => q.length > 0)
-            .slice(0, 6);
+        // From here on, any failure gives the credits back.
+        const refund = async () => {
+            try {
+                await User.updateOne({ _id: req.userId }, { $inc: { credits: cost } });
+            } catch (refundError) {
+                console.error(`REFUND FAILED for user ${req.userId} (${cost} credits):`, refundError);
+            }
+        };
 
-        if (questionArray.length === 0) {
-            return res.status(500).json({ message: "AI failed to generate questions" });
+        try {
+            const aiResponse = await askAi(messages);
+            if (!aiResponse || !aiResponse.trim()) {
+                await refund();
+                return res.status(500).json({ message: "AI returned empty response" });
+            }
+
+            const questionArray = aiResponse
+                .split("\n")
+                .map(q => q.trim())
+                .filter(q => q.length > 0)
+                .slice(0, 6);
+
+            if (questionArray.length === 0) {
+                await refund();
+                return res.status(500).json({ message: "AI failed to generate questions" });
+            }
+
+            const interview = await Interview.create({
+                userId: user._id,
+                role,
+                experience,
+                mode,
+                resumeText: safeResume,
+                questions: questionArray.map((q, index) => ({
+                    question: q,
+                    difficulty: ['easy', 'medium', 'medium', 'medium', 'hard', 'hard'][index],
+                    timeLimit: [60, 90, 90, 90, 120, 120][index]
+                }))
+            });
+
+            return res.json({
+                interviewId: interview._id,
+                creditsLeft: user.credits,
+                userName: user.name,
+                questions: interview.questions
+            });
+        } catch (error) {
+            await refund();
+            throw error;
         }
-
-        user.credits -= 50;
-        await user.save();
-
-        const interview = await Interview.create({
-            userId: user._id,
-            role,
-            experience,
-            mode,
-            resumeText: safeResume,
-            questions: questionArray.map((q, index) => ({
-                question: q,
-                difficulty: ['easy', 'medium', 'medium', 'medium', 'hard', 'hard'][index],
-                timeLimit: [60, 90, 90, 90, 120, 120][index]
-            }))
-        });
-
-        return res.json({
-            interviewId: interview._id,
-            creditsLeft: user.credits,
-            userName: user.name,
-            questions: interview.questions
-        });
 
     } catch (error) {
         console.error("generateQuestion Error:", error);
-        return res.status(500).json({ message: `Failed to create Interview: ${error.message}` });
+        return res.status(500).json({ message: "Failed to create the interview. You were not charged." });
     }
 };
 
 export const submitAnswer = async (req, res) => {
     try {
-        const { interviewId, questionIndex, answer, timeTaken } = req.body;
-        const interview = await Interview.findById(interviewId);
+        const { interviewId, questionIndex, answer, timeTaken } = req.body ?? {};
+        if (!isObjectIdString(interviewId)) {
+            return res.status(400).json({ message: "Invalid interview id" });
+        }
+        const index = Number(questionIndex);
+        if (!Number.isInteger(index) || index < 0) {
+            return res.status(400).json({ message: "Invalid question index" });
+        }
 
+        // Only the owner may answer: look the interview up by id AND user.
+        const interview = await Interview.findOne({ _id: interviewId, userId: req.userId });
         if (!interview) {
             return res.status(404).json({ message: "Interview not found" });
         }
+        if (interview.status === "completed") {
+            return res.status(409).json({ message: "Interview already completed" });
+        }
 
-        const question = interview.questions[questionIndex];
+        const question = interview.questions[index];
         if (!question) {
             return res.status(400).json({ message: "Invalid question index" });
         }
 
-        if (!answer) {
+        // Already evaluated: return the stored feedback instead of paying for another LLM call
+        // (and so a score cannot be re-rolled by submitting the same question again).
+        if (question.feedback) {
+            return res.json({ feedback: question.feedback });
+        }
+
+        const text = typeof answer === "string" ? answer.trim() : "";
+        if (!text) {
             question.score = 0;
             question.feedback = "You did not submit an answer";
             question.answer = "";
             await interview.save();
             return res.json({ feedback: question.feedback });
         }
+        if (text.length > LIMITS.MAX_ANSWER_CHARS) {
+            return res.status(400).json({ message: `Answer is too long (max ${LIMITS.MAX_ANSWER_CHARS} characters)` });
+        }
 
-        if (timeTaken > question.timeLimit) {
+        if (Number(timeTaken) > question.timeLimit) {
             question.score = 0;
             question.feedback = "Time limit exceeded. Answer not evaluated.";
-            question.answer = answer;
+            question.answer = text;
             await interview.save();
             return res.json({ feedback: question.feedback });
         }
@@ -228,7 +292,7 @@ Return ONLY valid JSON in this format:
             },
             {
                 role: "user",
-                content: `Question: ${question.question}\nAnswer: ${answer}`
+                content: `Question: ${question.question}\nAnswer: ${text}`
             }
         ];
 
@@ -237,7 +301,7 @@ Return ONLY valid JSON in this format:
         const parsed = JSON.parse(cleanJson);
 
         
-        question.answer = answer;
+        question.answer = text;
         question.confidence = clampScore(parsed.confidence);
         question.communication = clampScore(parsed.communication);
         question.correctness = clampScore(parsed.correctness);
@@ -250,14 +314,17 @@ Return ONLY valid JSON in this format:
 
     } catch (error) {
         console.error("submitAnswer Error:", error);
-        return res.status(500).json({ message: `Failed to submit answer: ${error.message}` });
+        return res.status(500).json({ message: "Failed to evaluate your answer. Please try again." });
     }
 };
 
 export const finishInterview = async (req, res) => {
     try {
-        const { interviewId } = req.body;
-        const interview = await Interview.findById(interviewId);
+        const { interviewId } = req.body ?? {};
+        if (!isObjectIdString(interviewId)) {
+            return res.status(400).json({ message: "Invalid interview id" });
+        }
+        const interview = await Interview.findOne({ _id: interviewId, userId: req.userId });
 
         if (!interview) {
             return res.status(404).json({ message: "Failed to find interview" });
@@ -306,7 +373,7 @@ export const finishInterview = async (req, res) => {
 
     } catch (error) {
         console.error("finishInterview Error:", error);
-        return res.status(500).json({ message: `Failed to finish interview: ${error.message}` });
+        return res.status(500).json({ message: "Failed to finish the interview. Please try again." });
     }
 };
 
@@ -323,7 +390,10 @@ export const getMyInterviews = async (req, res) => {
 
 export const getInterviewReport = async (req, res) => {
     try {
-        const interview = await Interview.findById(req.params.id)
+        if (!isObjectIdString(req.params.id)) {
+            return res.status(404).json({ message: "Interview not Found" })
+        }
+        const interview = await Interview.findOne({ _id: req.params.id, userId: req.userId })
 
         if (!interview) {
             return res.status(404).json({ message: "Interview not Found" })
@@ -364,6 +434,7 @@ export const getInterviewReport = async (req, res) => {
         })
 
     } catch (error) {
-        return res.status(500).json({ message: `Failed to find current interview report: ${error}` });
+        console.error("getInterviewReport Error:", error);
+        return res.status(500).json({ message: "Failed to load the interview report." });
     }
 }

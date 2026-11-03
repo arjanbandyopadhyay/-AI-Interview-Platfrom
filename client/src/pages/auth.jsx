@@ -13,10 +13,9 @@ function Auth({isModel=false}) {
   const handleGoogleAuth=async()=>{
     try {
       const response=await signInWithPopup(auth,provider)
-      let User=response.user
-      let email=User.email
-      let name=User.displayName
-      const result=await axios.post(ServerUrl+"/api/auth/google",{name,email},{withCredentials:true})
+      // The server verifies this signed token with Firebase; it never trusts a name/email sent by the browser.
+      const idToken=await response.user.getIdToken()
+      const result=await axios.post(ServerUrl+"/api/auth/google",{idToken},{withCredentials:true})
       dispatch(setUserData(result.data))
 
     } catch (error) {
