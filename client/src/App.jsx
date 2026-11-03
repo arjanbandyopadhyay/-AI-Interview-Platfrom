@@ -10,7 +10,7 @@ import InterviewHistory from "./pages/InterviewHistory"
 import InterviewReport from "./pages/InterviewReport"
 import Pricing from "./pages/Pricing"
 
-export const ServerUrl = "https://ai-interview-platfrom.onrender.com"
+export const ServerUrl = import.meta.env.VITE_API_URL || "https://ai-interview-platfrom.onrender.com"
 
 function App() {
   const dispatch=useDispatch()

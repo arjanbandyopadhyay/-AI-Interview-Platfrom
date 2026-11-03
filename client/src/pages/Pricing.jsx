@@ -61,12 +61,9 @@ function Pricing() {
     const handlePayment = async (plan) => {
     try {
         setLoadingPlan(plan.id)
-        const amount = plan.id === 'basic' ? 100 : plan.id === 'pro' ? 500 : 0
-
+        // Only the plan id is sent: the server decides the price and the credits.
         const result = await axios.post(ServerUrl + '/api/payment/order', {
-            planId: plan.id,
-            amount: amount,
-            credits: plan.credits
+            planId: plan.id
         }, { withCredentials: true })
             console.log(result.data)
         const options = {

@@ -1,72 +1,92 @@
 import Payment from "../models/payment.models.js";
 import User from "../models/users.js";
 import razorpay from "../services/razorpay.service.js";
-import  crypto from 'crypto'
+import { getPaidPlan } from "../config/plans.js";
+import crypto from 'crypto'
+
+// Constant-time comparison of two hex signatures (also rejects different lengths / non-hex input).
+const safeEqualHex = (expected, given) => {
+    if (typeof given !== "string" || given.length !== expected.length || !/^[a-f0-9]+$/i.test(given)) return false
+    return crypto.timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(given, "hex"))
+}
 
 export const createOrder=async (req,res)=>{
     try {
-        const {planId,amount,credits}=req.body;
-        if(!amount || !credits){
-            return res.status(400).json({message:'Invalid plan data'})
+        // The price and the credits come from the server's plan table, never from the request body.
+        const planId=req.body?.planId
+        const plan=getPaidPlan(planId)
+        if(!plan){
+            return res.status(400).json({message:'Invalid plan'})
         }
-        const options={
-            amount:amount*100,
+        const order=await razorpay.orders.create({
+            amount:plan.amount*100,
             currency:'INR',
-            receipt:`receipt_${Date.now()}`
-        }
-        const order=await razorpay.orders.create(options)
+            receipt:`receipt_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`
+        })
         await Payment.create({
            userId:req.userId,
            planId,
-           amount,
-           credits,
+           amount:plan.amount,
+           credits:plan.credits,
            razorpayOrderId:order.id,
-           status:'created' 
+           status:'created'
         })
         return res.json(order);
-
-        }
-        catch (error) {
-        return res.status(500).json({message:`faile to create Razorpay Order ${error}`})
+    } catch (error) {
+        console.error("createOrder Error:",error)
+        return res.status(500).json({message:'Failed to create the payment order'})
     }
-    } 
-
+}
 
 export const verifyPayment=async (req,res)=>{
     try {
-        const {razorpay_order_id,razorpay_payment_id,razorpay_signature}=req.body;
-        
-        const body=razorpay_order_id + '|' +razorpay_payment_id;
-        const expectedSignature=crypto
-        .createHmac("sha256",process.env.RAZORPAY_KEY_SECRET)
-        .update(body)
-        .digest('hex')
+        const {razorpay_order_id,razorpay_payment_id,razorpay_signature}=req.body ?? {};
+        const fields=[razorpay_order_id,razorpay_payment_id,razorpay_signature]
+        if(!fields.every((v)=>typeof v==="string" && v.length>0 && v.length<=200)){
+            return res.status(400).json({message:'Missing payment details'})
+        }
 
-        if(expectedSignature !== razorpay_signature){
+        const expectedSignature=crypto
+            .createHmac("sha256",process.env.RAZORPAY_KEY_SECRET)
+            .update(razorpay_order_id + '|' + razorpay_payment_id)
+            .digest('hex')
+        if(!safeEqualHex(expectedSignature,razorpay_signature)){
             return res.status(400).json({message:'Invalid payment signature'})
         }
-        const payment= await Payment.findOne({
-            razorpayOrderId:razorpay_order_id,
-        })
-        if(!payment){
-            return res.status(404).json({message:"Payment not found"})
-        }
-        if(payment.status==='paid'){
-            return res.json({message:'Already Processed'})
-        }
-        payment.status='paid'
-        payment.razorpayOrderId=razorpay_payment_id;
-        await payment.save()
 
-        const updateUser= await User.findByIdAndUpdate(payment.userId,{
-            $inc:{credits:payment.credits}
-        },{new:true}) 
-        res.json({
-            success:true,
-            message:'Payment verified and credits added',
-            user:updateUser
-        })
+        // Claim the payment atomically: only one request can move it from "created" to "paid",
+        // so double-clicks or parallel requests cannot add the credits twice.
+        // The order must also belong to the logged-in user.
+        const payment=await Payment.findOneAndUpdate(
+            {razorpayOrderId:razorpay_order_id,userId:req.userId,status:'created'},
+            {$set:{status:'paid',razorpayPaymentId:razorpay_payment_id}},
+            {returnDocument:"after"}
+        )
+        if(!payment){
+            const existing=await Payment.findOne({razorpayOrderId:razorpay_order_id,userId:req.userId})
+            if(!existing){
+                return res.status(404).json({message:"Payment not found"})
+            }
+            const user=await User.findById(req.userId)
+            return res.json({success:true,message:'Already Processed',user})
+        }
+
+        try {
+            const updatedUser=await User.findByIdAndUpdate(payment.userId,{
+                $inc:{credits:payment.credits}
+            },{returnDocument:"after"})
+            return res.json({
+                success:true,
+                message:'Payment verified and credits added',
+                user:updatedUser
+            })
+        } catch (error) {
+            // Could not add the credits: release the claim so the user can retry the verification.
+            await Payment.updateOne({_id:payment._id},{$set:{status:'created'},$unset:{razorpayPaymentId:""}})
+            throw error
+        }
     } catch (error) {
-        return res.status(500).json({message:`faile to create Razorpay payment ${error}`})
+        console.error("verifyPayment Error:",error)
+        return res.status(500).json({message:'Failed to verify the payment'})
     }
 }
