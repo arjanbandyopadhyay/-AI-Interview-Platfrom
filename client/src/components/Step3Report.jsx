@@ -4,8 +4,6 @@ import { motion } from "motion/react";
 import { buildStyles, CircularProgressbar } from 'react-circular-progressbar';
 import 'react-circular-progressbar/dist/styles.css';
 import {Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts'
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable'
 
 
 function Step3Report({report}) {
@@ -56,7 +54,15 @@ function Step3Report({report}) {
   const score=finalScore;
   const percentage=(score/10)*100;
 
-  const downloadPDF=()=>{
+  const downloadPDF=async()=>{
+  // jsPDF and its table plugin are large and only needed here: fetch them when the button is clicked
+  let jsPDF,autoTable
+  try {
+    ;[{jsPDF},{default:autoTable}]=await Promise.all([import('jspdf'),import('jspdf-autotable')])
+  } catch {
+    alert('Could not load the PDF tools. Please check your connection and try again.')
+    return
+  }
   const doc= new jsPDF('p','mm','a4');
   const pageWidth=doc.internal.pageSize.getWidth();
   const margin=20;

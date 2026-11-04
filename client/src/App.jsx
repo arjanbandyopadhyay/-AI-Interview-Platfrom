@@ -1,14 +1,21 @@
 import { Route, Routes } from "react-router-dom"
 import Home from './pages/Home'
-import Auth from './pages/auth'
-import { useEffect } from "react"
+import { lazy, Suspense, useEffect } from "react"
 import axios from "axios"
 import { useDispatch } from "react-redux"
 import { setUserData } from "./redux/userSlice"
-import InterviewPage from "./pages/InterviewPage"
-import InterviewHistory from "./pages/InterviewHistory"
-import InterviewReport from "./pages/InterviewReport"
-import Pricing from "./pages/Pricing"
+
+// The landing page loads eagerly; every other page is a separate chunk that is downloaded when the user
+// navigates to it, so first-time visitors do not pay for recharts, jsPDF, Firebase and the interview UI up front.
+const Auth = lazy(() => import('./pages/auth'))
+const InterviewPage = lazy(() => import("./pages/InterviewPage"))
+const InterviewHistory = lazy(() => import("./pages/InterviewHistory"))
+const InterviewReport = lazy(() => import("./pages/InterviewReport"))
+const Pricing = lazy(() => import("./pages/Pricing"))
+
+const RouteFallback = () => (
+  <div className="min-h-screen flex items-center justify-center text-gray-500">Loading...</div>
+)
 
 export const ServerUrl = import.meta.env.VITE_API_URL || "https://ai-interview-platfrom.onrender.com"
 
@@ -32,6 +39,7 @@ function App() {
   },[dispatch])
 
   return (
+    <Suspense fallback={<RouteFallback />}>
     <Routes>
       <Route path='/' element={<Home />} />
       <Route path='/auth' element={<Auth />} />
@@ -40,6 +48,7 @@ function App() {
         <Route path='/report/:id'element={<InterviewReport />}/>
         <Route path='/Pricing' element={<Pricing/>} />
     </Routes>
+    </Suspense>
    
   
   )
