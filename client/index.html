@@ -4,11 +4,19 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/img1.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Open the connection to the API while the app bundle is still downloading.
+         Keep this URL in sync with ServerUrl in src/App.jsx. -->
+    <link rel="preconnect" href="https://ai-interview-platfrom.onrender.com" crossorigin />
+    <script>
+      // Free hosting spins the backend down when idle. Waking it now overlaps the cold start with the bundle download.
+      if (location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+        fetch("https://ai-interview-platfrom.onrender.com/health", { mode: "no-cors", cache: "no-store" }).catch(function () {});
+      }
+    </script>
     <title>Interview IQ</title>
   </head>
   <body>
     <div id="root"></div>
-    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
