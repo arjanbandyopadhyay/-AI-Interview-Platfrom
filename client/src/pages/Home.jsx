@@ -2,12 +2,12 @@ import { useSelector } from 'react-redux'
 import Navbar from '../components/Navbar'
 import {motion} from "motion/react";
 import { useState } from 'react';
-import hrimg from '../assets/HR.png'
-import confiimg from '../assets/confi.png'
-import pdfimg from '../assets/pdf.png'
-import analyticsimg from '../assets/history.png'
-import evalimg from '../assets/ai-ans.png'
-import creditimg from '../assets/credit.png'
+import hrimg from '../assets/HR.webp'
+import confiimg from '../assets/confi.webp'
+import pdfimg from '../assets/pdf.webp'
+import analyticsimg from '../assets/history.webp'
+import evalimg from '../assets/ai-ans.webp'
+import creditimg from '../assets/credit.webp'
 import{
   BsRobot,
   BsMic,
@@ -174,7 +174,7 @@ function Home() {
                 className='bg-white border-gray-200 rounded-3xl p-8 shadow-sm hover:shadow-xl transition-all'>
                   <div className='flex flex-col md:flex-row items-center gap-8'>
                     <div className='w-full md:w-1/2 flex justify-center'>
-                    <img src={item.image} alt={item.title} className='w-full h-auto object-contain max-h-64'/>
+                    <img src={item.image} alt={item.title} loading='lazy' decoding='async' className='w-full h-auto object-contain max-h-64'/>
                     </div>
                     <div className='w-full md:w-1/2'>
                     <div className='bg-green-50 text-green-600 w-12 h-12 rounded-xl flex items-center justify-center mb-6'>
@@ -237,6 +237,8 @@ function Home() {
                     <img
                     src={mode.img}
                     alt={mode.title}
+                    loading='lazy'
+                    decoding='async'
                     className='w-28 h-28 object-contain'/>
                     </div>
                   </div>
