@@ -250,3 +250,19 @@ test("upload: the limiter runs before the file is stored (6th upload in 10 minut
   assert.equal(sixth.status, 429);
   assert.equal(filesInPublic(), before);
 });
+
+test("/health is cheap, needs no login and is never rate limited", async () => {
+  const first = await api("/health");
+  assert.equal(first.status, 200);
+  assert.equal(first.json.ok, true);
+  assert.equal(first.headers.get("cache-control"), "no-store");
+  for (let i = 0; i < 700; i++) assert.equal((await api("/health")).status, 200);   // far above the 600/15 min API limit
+});
+
+test("every response carries a Server-Timing header, including errors and 429s", async () => {
+  const ok = await api("/health");
+  const unauth = await api("/api/user/current-user");
+  const notFound = await api("/api/nope");
+  for (const r of [ok, unauth, notFound]) assert.match(r.headers.get("server-timing"), /^total;dur=\d+(\.\d)?$/);
+  assert.equal(unauth.status, 401); assert.equal(notFound.status, 404);
+});

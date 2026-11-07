@@ -31,3 +31,18 @@ test("upstream failures surface a generic error (the API key and response never 
   reply = async () => { const e = new Error("401"); e.response = { data: { error: "bad key sk-test" } }; throw e; };
   await assert.rejects(quiet(() => askAi([{ role: "user", content: "hi" }])), (err) => err.message === "OpenRouter API Error" && !/sk-test/.test(err.message));
 });
+
+test("logs how long each LLM call took, with prompt and reply sizes", async () => {
+  const logged = []; const realLog = console.log; console.log = (...a) => logged.push(a.join(" "));
+  try { await askAi([{ role: "user", content: "hello there" }]); } finally { console.log = realLog; }
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /^LLM call ok in \d+ms \(prompt 11 chars, reply 5 chars\)$/);
+});
+
+test("a failed call logs its duration but never the prompt", async () => {
+  reply = async () => { throw new Error("boom"); };
+  const errs = []; const realErr = console.error; console.error = (...a) => errs.push(a.join(" "));
+  try { await assert.rejects(askAi([{ role: "user", content: "my private resume text" }]), /OpenRouter API Error/); } finally { console.error = realErr; }
+  assert.match(errs[0], /OpenRouter Error after \d+ms/);
+  assert.doesNotMatch(errs.join(" "), /private resume/);
+});
