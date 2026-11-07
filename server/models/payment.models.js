@@ -18,6 +18,9 @@ const paymentSchema=new mongoose.Schema({
     }
 },{timestamps:true})
 
+// verifyPayment looks the order up by razorpayOrderId (plus userId and status).
+paymentSchema.index({ razorpayOrderId: 1 })
+
 const Payment=mongoose.model('Payment',paymentSchema)
 
 export default Payment

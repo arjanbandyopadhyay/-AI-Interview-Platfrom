@@ -43,6 +43,11 @@ const interviewSchema=new mongoose.Schema({
         }
 },{timestamps:true})
 
+// "My interviews" runs find({ userId }).sort({ createdAt: -1 }). Without this index MongoDB scans every
+// interview in the collection and sorts the matches in memory; with it, it reads one user's interviews
+// already in order.
+interviewSchema.index({ userId: 1, createdAt: -1 })
+
 const Interview=mongoose.model("Interview",interviewSchema)
 
 export default Interview
