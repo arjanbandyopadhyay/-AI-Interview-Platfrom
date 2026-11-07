@@ -139,12 +139,51 @@ npm test
 
 The suite (Node's built-in test runner, no extra dependencies, Node 22.3+) has tests for login, payments, credits, ownership, rate limiting and uploads. Most call the controllers directly against an in-memory fake of the database that behaves like MongoDB's atomic updates; `tests/api.integration.test.js` runs the real Express app over HTTP (real cookies, CORS, rate limiter, Multer and pdf.js) with only the database, Firebase, Razorpay and the LLM faked. The tests cover the specific attacks that were fixed (forged login, price tampering, double credit, reading someone else's interview, racing the credit check).
 
+## Performance
+
+I measured before changing anything, and the results decided what to work on.
+
+**What is *not* the bottleneck**
+
+| Measured | Result |
+| --- | --- |
+| PDF parsing (pdf.js, 1 / 2 / 5-page resumes) | 20-77 ms each; the event loop stalled at most ~31 ms. Resumes are limited to 5 per 10 minutes per user, so moving it to a worker thread would add complexity for no gain. Left as is. |
+| Server overhead per request (real Express app with JWT auth, rate limiter and a fake instant database, load generator on the same single vCPU) | ~0.6 ms p50 for one connection; ~2,000-3,000 requests/s at 20 connections. The Express layer is far faster than anything the database or the LLM allows. |
+
+So end-to-end latency is dominated by things outside the Node code: LLM calls (seconds), the free-hosting cold start, and how much the browser has to download before the page works.
+
+**What changed**
+
+| Change | Effect |
+| --- | --- |
+| Landing-page images PNG -> WebP, mode icons resized to 2x display size, `loading="lazy"` | **974 KB -> 89 KB (-91 %)**, no visible difference |
+| Favicon 612x408 -> 128x128 | **152 KB -> 12.5 KB** (fetched on every page) |
+| Interview avatar videos 1280x720 -> 960x540, no unused audio track, `faststart` | **1,124 KB -> 162 KB** (male) and **1,309 KB -> 234 KB** (female); SSIM 0.99. The index is now at the start of the file, so playback begins while the rest downloads (before, the whole file had to arrive first) |
+| Razorpay checkout script no longer blocks every page load | Loaded only when the Pricing page opens (it starts downloading on arrival, so Pay still opens instantly). Before, every first paint waited for a third-party script |
+| Routes are code-split (`React.lazy`); jsPDF loaded only on "Download PDF"; report charts prefetched during the interview | Smaller first-load JavaScript: a visitor to the landing page no longer downloads recharts, jsPDF, Firebase or the interview UI |
+| `preconnect` to the API plus an early `/health` request from `index.html` | The TLS handshake and (on free hosting) the cold-start wake-up overlap with the bundle download |
+| MongoDB indexes `{ userId, createdAt }` on interviews and `{ razorpayOrderId }` on payments | History list and payment verification stay fast as the collections grow (no collection scan / in-memory sort) |
+| `GET /health`, `Server-Timing` header, `SLOW ...` request log, `LLM call ok in Nms` log | Production latency is now observable instead of guessed |
+
+**Measure it yourself**
+
+- *Bundle size:* run `cd client && npm run build`; Vite prints the size of every chunk. Compare with the build of the commit before these changes.
+- *Page load:* Chrome DevTools > Network, tick "Disable cache" and throttle to "Fast 3G", or run a Lighthouse report on the deployed site.
+- *Per-request time:* every API response has a `Server-Timing` header (DevTools > Network > Timing). The server logs each LLM call's duration and every request slower than `SLOW_REQUEST_MS`.
+- *Throughput and latency under load:* `cd server && npm run loadtest -- --url https://your-api.example.com --path /health --connections 20 --duration 10`. It prints requests/s and p50/p90/p95/p99 latency, and accepts `--cookie`, `--method` and `--body` for authenticated routes. Run it against `/health` for the framework baseline and against a read route to include the database.
+
+**Cold starts.** Free hosting usually spins a service down after about 15 minutes without traffic, and the next request waits for it to start again. The client already wakes the backend while the page loads; to avoid the wait entirely, point a free uptime monitor (UptimeRobot, cron-job.org) at `https://<your-api>/health` every 10 minutes.
+
 ## Project Structure
 
 ```
 .
-├── client/    # React frontend
+├── client/    # React frontend (npm test: unit tests for the Razorpay loader)
 └── server/    # Express API, MongoDB models, AI and payment logic
+    ├── app.js, index.js    # the Express app / the process that starts it
+    ├── middleware/         # auth, rate limiting, request timing, uploads
+    ├── scripts/loadtest.mjs  # dependency-free load generator (npm run loadtest)
+    └── tests/              # npm test
 ```
 
 ## Browser Support
