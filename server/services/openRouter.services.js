@@ -1,6 +1,7 @@
 import axios from 'axios'
 
 export const askAi=async(messages)=>{
+    const startedAt=Date.now()   // LLM calls are the slowest thing this server does: log how long they take
     try {
         if(!messages || !Array.isArray(messages) || messages.length===0){
             throw  new Error("Message array is empty:");
@@ -21,9 +22,11 @@ export const askAi=async(messages)=>{
   if(!content || !content.trim()){
     throw new Error("AI returned empty response")
   }
+  const promptChars=messages.reduce((n,m)=>n+String(m?.content ?? "").length,0)
+  console.log(`LLM call ok in ${Date.now()-startedAt}ms (prompt ${promptChars} chars, reply ${content.length} chars)`)
   return content
     } catch (error) {
-        console.error("OpenRouter Error:",error.response?.data|| error.message);
+        console.error(`OpenRouter Error after ${Date.now()-startedAt}ms:`,error.response?.data|| error.message);
         throw new Error("OpenRouter API Error");
     }
 }

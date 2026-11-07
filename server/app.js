@@ -6,6 +6,7 @@ import userRouter from "./routes/user.route.js"
 import interviewRouter from "./routes/interview.route.js"
 import paymentRouter from "./routes/payment.route.js"
 import { globalLimiter, authLimiter } from "./middleware/limiters.js"
+import { requestTiming } from "./middleware/requestTiming.js"
 
 // The Express app without starting a server, so tests can run it over real HTTP.
 const app=express()
@@ -13,6 +14,15 @@ const app=express()
 // Render (like most hosts) puts a proxy in front of the app. Trust one hop so req.ip is the real client
 // address; without this every user would share the proxy's IP and therefore one rate limit.
 app.set("trust proxy",Number(process.env.TRUST_PROXY ?? 1))
+
+app.use(requestTiming())   // Server-Timing header + log of slow requests
+
+// Health check for uptime pingers and the client's early wake-up request. It does no database work and
+// sits before the rate limiter, so a keep-alive pinger can never be throttled.
+app.get("/health",(req,res)=>{
+    res.set("Cache-Control","no-store")
+    res.json({ok:true,uptime:Math.round(process.uptime())})
+})
 
 app.use(cors({
     // set CLIENT_URL (e.g. http://localhost:5173) for local development
